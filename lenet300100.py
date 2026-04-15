@@ -10,8 +10,12 @@ import numpy as np
 from python.keras.layers.amdenselayer import denseam
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--mul", type=str, help="multiplier", default="lut/MBM_7.bin")
-parser.add_argument("--approx", type=bool, help="use approximate multiplier or not", default=False)
+
+#parser.add_argument("--mul", type=str, help="multiplier", default="lut/MBM_7.bin")
+#parser.add_argument("--approx", type=bool, help="use approximate multiplier or not", default=False)
+parser.add_argument("--mul", type=str, default="lut/MBM_7.bin")
+parser.add_argument("--approx", action="store_true")
+
 args = parser.parse_args()
 APPROX = args.approx
 (ds_train, ds_test), ds_info = tfds.load(
