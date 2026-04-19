@@ -8,10 +8,11 @@ from tkinter import ttk, filedialog, messagebox
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+
 class ApproxTrainGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("ApproxTrain GUI")
+        self.root.title("ApproxTrain")
         self.root.geometry("900x600")
 
         self.output_queue = queue.Queue()
@@ -21,58 +22,27 @@ class ApproxTrainGUI:
         self.mul_var = tk.StringVar(value=str(REPO_ROOT / "lut" / "MBM_7.bin"))
         self.approx_var = tk.BooleanVar(value=True)
 
-        self.build_ui()
+        # Container holds all frames stacked on top of each other
+        self.container = tk.Frame(self.root)
+        self.container.pack(fill="both", expand=True)
+        self.container.grid_rowconfigure(0, weight=1)
+        self.container.grid_columnconfigure(0, weight=1)
+
+        self.frames = {}
+        for FrameClass in (MainMenuFrame, TrainFrame, CreditsFrame, OptionsFrame):
+            frame = FrameClass(self.container, self)
+            self.frames[FrameClass] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+
+        self.show_frame(MainMenuFrame)
         self.poll_output()
 
-    def build_ui(self):
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill="both", expand=True)
+    def show_frame(self, frame_class):
+        self.frames[frame_class].tkraise()
 
-        controls = ttk.LabelFrame(main, text="Run Settings", padding=10)
-        controls.pack(fill="x")
-
-        ttk.Label(controls, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        script_box = ttk.Combobox(
-            controls,
-            textvariable=self.script_var,
-            values=["lenet300100.py", "mnist_example.py"],
-            state="readonly",
-            width=30
-        )
-        script_box.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
-
-        ttk.Label(controls, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(controls, textvariable=self.mul_var, width=60).grid(
-            row=1, column=1, sticky="ew", padx=5, pady=5
-        )
-        ttk.Button(controls, text="Browse", command=self.browse_mul).grid(
-            row=1, column=2, padx=5, pady=5
-        )
-
-        ttk.Checkbutton(
-            controls,
-            text="Use approximate mode",
-            variable=self.approx_var
-        ).grid(row=2, column=1, sticky="w", padx=5, pady=5)
-
-        controls.columnconfigure(1, weight=1)
-
-        buttons = ttk.Frame(main)
-        buttons.pack(fill="x", pady=(10, 10))
-
-        ttk.Button(buttons, text="Run", command=self.run_script).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Stop", command=self.stop_script).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Clear Log", command=self.clear_log).pack(side="left", padx=5)
-
-        log_frame = ttk.LabelFrame(main, text="Output", padding=8)
-        log_frame.pack(fill="both", expand=True)
-
-        self.log = tk.Text(log_frame, wrap="word", height=25)
-        self.log.pack(side="left", fill="both", expand=True)
-
-        scrollbar = ttk.Scrollbar(log_frame, command=self.log.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.log.configure(yscrollcommand=scrollbar.set)
+    # ------------------------------------------------------------------ #
+    # Training backend (shared across frames)
+    # ------------------------------------------------------------------ #
 
     def browse_mul(self):
         path = filedialog.askopenfilename(
@@ -91,7 +61,6 @@ class ApproxTrainGUI:
 
         cmd = [sys.executable, str(script_path)]
 
-        # Best with patched lenet300100.py using action='store_true'
         if script == "lenet300100.py":
             cmd += ["--mul", self.mul_var.get()]
             if self.approx_var.get():
@@ -143,16 +112,152 @@ class ApproxTrainGUI:
             self.write_log("\n[Stop requested]\n")
 
     def clear_log(self):
-        self.log.delete("1.0", tk.END)
+        self.frames[TrainFrame].log.delete("1.0", tk.END)
 
     def write_log(self, text):
-        self.log.insert(tk.END, text)
-        self.log.see(tk.END)
+        log = self.frames[TrainFrame].log
+        log.insert(tk.END, text)
+        log.see(tk.END)
 
     def poll_output(self):
         while not self.output_queue.empty():
             self.write_log(self.output_queue.get())
         self.root.after(100, self.poll_output)
+
+
+# ------------------------------------------------------------------ #
+# Frames
+# ------------------------------------------------------------------ #
+
+class MainMenuFrame(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self._build()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        title = tk.Label(
+            self,
+            text="ApproxTrain",
+            font=("Helvetica", 48, "bold"),
+        )
+        title.grid(row=0, column=0, pady=(80, 20))
+
+        btn_frame = tk.Frame(self)
+        btn_frame.grid(row=1, column=0)
+
+        btn_cfg = dict(width=12, height=2)
+        tk.Button(btn_frame, text="Credits",
+                  command=lambda: self.app.show_frame(CreditsFrame),
+                  **btn_cfg).pack(side="left", padx=20)
+        tk.Button(btn_frame, text="Start",
+                  command=lambda: self.app.show_frame(TrainFrame),
+                  **btn_cfg).pack(side="left", padx=20)
+        tk.Button(btn_frame, text="Options",
+                  command=lambda: self.app.show_frame(OptionsFrame),
+                  **btn_cfg).pack(side="left", padx=20)
+
+
+class TrainFrame(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self._build()
+
+    def _build(self):
+        main = ttk.Frame(self, padding=12)
+        main.pack(fill="both", expand=True)
+
+        # Back button
+        ttk.Button(main, text="← Menu",
+                   command=lambda: self.app.show_frame(MainMenuFrame)).pack(anchor="w")
+
+        controls = ttk.LabelFrame(main, text="Run Settings", padding=10)
+        controls.pack(fill="x", pady=(6, 0))
+
+        ttk.Label(controls, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        script_box = ttk.Combobox(
+            controls,
+            textvariable=self.app.script_var,
+            values=["lenet300100.py", "mnist_example.py"],
+            state="readonly",
+            width=30
+        )
+        script_box.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+
+        ttk.Label(controls, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(controls, textvariable=self.app.mul_var, width=60).grid(
+            row=1, column=1, sticky="ew", padx=5, pady=5
+        )
+        ttk.Button(controls, text="Browse", command=self.app.browse_mul).grid(
+            row=1, column=2, padx=5, pady=5
+        )
+
+        ttk.Checkbutton(
+            controls,
+            text="Use approximate mode",
+            variable=self.app.approx_var
+        ).grid(row=2, column=1, sticky="w", padx=5, pady=5)
+
+        controls.columnconfigure(1, weight=1)
+
+        buttons = ttk.Frame(main)
+        buttons.pack(fill="x", pady=(10, 6))
+
+        ttk.Button(buttons, text="Run", command=self.app.run_script).pack(side="left", padx=5)
+        ttk.Button(buttons, text="Stop", command=self.app.stop_script).pack(side="left", padx=5)
+        ttk.Button(buttons, text="Clear Log", command=self.app.clear_log).pack(side="left", padx=5)
+
+        log_frame = ttk.LabelFrame(main, text="Output", padding=8)
+        log_frame.pack(fill="both", expand=True)
+
+        self.log = tk.Text(log_frame, wrap="word", height=25)
+        self.log.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(log_frame, command=self.log.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.log.configure(yscrollcommand=scrollbar.set)
+
+
+class CreditsFrame(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self._build()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        ttk.Button(self, text="← Menu",
+                   command=lambda: self.app.show_frame(MainMenuFrame)).grid(
+            row=0, column=0, sticky="w", padx=12, pady=8)
+
+        tk.Label(self, text="Credits", font=("Helvetica", 24, "bold")).grid(
+            row=1, column=0)
+
+
+class OptionsFrame(tk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+        self._build()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        ttk.Button(self, text="← Menu",
+                   command=lambda: self.app.show_frame(MainMenuFrame)).grid(
+            row=0, column=0, sticky="w", padx=12, pady=8)
+
+        tk.Label(self, text="Options", font=("Helvetica", 24, "bold")).grid(
+            row=1, column=0)
+
 
 if __name__ == "__main__":
     root = tk.Tk()
