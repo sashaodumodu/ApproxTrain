@@ -2,30 +2,55 @@ import sys
 import queue
 import threading
 import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-# Maps friendly LUT name → filename
+# Maps friendly LUT name → full path
 LUT_FILES = {p.name: p for p in sorted((REPO_ROOT / "lut").glob("*.bin"))}
 
-# Maps friendly model name → script filename
-MODELS = {
-    "LeNet-300-100": "lenet300100.py",
-}
+# Maps friendly model name → script filename (for Quick Start / Build)
+MODELS = {"LeNet-300-100": "lenet300100.py"}
 
 DATASETS = ["MNIST"]
 
+# ── Layer definitions for Model Maker ────────────────────────────────────────
+# Each param: name, label, type ("int"|"float"|"choice"), default, [choices]
+LAYER_DEFS = {
+    "Dense": [
+        {"name": "units",      "label": "Units",      "type": "int",    "default": 128},
+        {"name": "activation", "label": "Activation", "type": "choice", "default": "relu",
+         "choices": ["relu", "sigmoid", "softmax", "tanh", "linear"]},
+    ],
+    "Flatten": [],
+    "Dropout": [
+        {"name": "rate", "label": "Rate", "type": "float", "default": 0.5},
+    ],
+    "Conv2D": [
+        {"name": "filters",     "label": "Filters",    "type": "int",    "default": 32},
+        {"name": "kernel_size", "label": "Kernel",     "type": "int",    "default": 3},
+        {"name": "activation",  "label": "Activation", "type": "choice", "default": "relu",
+         "choices": ["relu", "sigmoid", "tanh", "linear"]},
+    ],
+    "MaxPooling2D": [
+        {"name": "pool_size", "label": "Pool Size", "type": "int", "default": 2},
+    ],
+    "BatchNormalization": [],
+    "Input (Flatten 28×28)": [],   # convenience first-layer shortcut
+}
 
-# ------------------------------------------------------------------ #
-# Shared runner mixin — gives any frame its own process + output queue
-# ------------------------------------------------------------------ #
+LAYER_NAMES = list(LAYER_DEFS.keys())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared runner mixin
+# ─────────────────────────────────────────────────────────────────────────────
 
 class RunnerMixin:
-    """Adds run/stop/poll machinery to a Frame subclass."""
-
     def _init_runner(self, log_widget):
         self._log = log_widget
         self._queue = queue.Queue()
@@ -51,12 +76,9 @@ class RunnerMixin:
     def _run_thread(self, cmd):
         try:
             self._process = subprocess.Popen(
-                cmd,
-                cwd=REPO_ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1,
+                cmd, cwd=REPO_ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                universal_newlines=True, bufsize=1,
             )
             assert self._process.stdout is not None
             for line in self._process.stdout:
@@ -74,15 +96,15 @@ class RunnerMixin:
             self._write("\n[Stop requested]\n")
 
 
-# ------------------------------------------------------------------ #
+# ─────────────────────────────────────────────────────────────────────────────
 # App controller
-# ------------------------------------------------------------------ #
+# ─────────────────────────────────────────────────────────────────────────────
 
 class ApproxTrainGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("ApproxTrain")
-        self.root.geometry("900x620")
+        self.root.geometry("960x660")
 
         self.container = tk.Frame(self.root)
         self.container.pack(fill="both", expand=True)
@@ -91,7 +113,7 @@ class ApproxTrainGUI:
 
         self.frames = {}
         for FrameClass in (MainMenuFrame, QuickStartFrame, BuildFrame,
-                           CreditsFrame, OptionsFrame):
+                           ModelMakerFrame, CreditsFrame, OptionsFrame):
             frame = FrameClass(self.container, self)
             self.frames[FrameClass] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -102,9 +124,9 @@ class ApproxTrainGUI:
         self.frames[frame_class].tkraise()
 
 
-# ------------------------------------------------------------------ #
-# Frames
-# ------------------------------------------------------------------ #
+# ─────────────────────────────────────────────────────────────────────────────
+# Main menu
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MainMenuFrame(tk.Frame):
     def __init__(self, parent, app):
@@ -117,36 +139,35 @@ class MainMenuFrame(tk.Frame):
         self.rowconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        tk.Label(
-            self,
-            text="ApproxTrain",
-            font=("Helvetica", 48, "bold"),
-        ).grid(row=0, column=0, pady=(80, 20))
+        tk.Label(self, text="ApproxTrain",
+                 font=("Helvetica", 48, "bold")).grid(row=0, column=0, pady=(80, 20))
 
         btn_frame = tk.Frame(self)
         btn_frame.grid(row=1, column=0)
 
-        btn_cfg = dict(width=14, height=2)
-        tk.Button(btn_frame, text="Credits",
-                  command=lambda: self.app.show_frame(CreditsFrame),
-                  **btn_cfg).pack(side="left", padx=16)
-        tk.Button(btn_frame, text="Quick Start",
-                  command=lambda: self.app.show_frame(QuickStartFrame),
-                  **btn_cfg).pack(side="left", padx=16)
-        tk.Button(btn_frame, text="Build",
-                  command=lambda: self.app.show_frame(BuildFrame),
-                  **btn_cfg).pack(side="left", padx=16)
-        tk.Button(btn_frame, text="Options",
-                  command=lambda: self.app.show_frame(OptionsFrame),
-                  **btn_cfg).pack(side="left", padx=16)
+        buttons = [
+            ("Credits",     CreditsFrame),
+            ("Quick Start", QuickStartFrame),
+            ("Build",       BuildFrame),
+            ("Model Maker", ModelMakerFrame),
+            ("Options",     OptionsFrame),
+        ]
+        for label, frame_cls in buttons:
+            tk.Button(btn_frame, text=label, width=12, height=2,
+                      command=lambda fc=frame_cls: self.app.show_frame(fc)
+                      ).pack(side="left", padx=12)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quick Start
+# ─────────────────────────────────────────────────────────────────────────────
 
 class QuickStartFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
         self.app = app
         self._script_var = tk.StringVar(value="lenet300100.py")
-        self._mul_var = tk.StringVar(value=str(REPO_ROOT / "lut" / "MBM_7.bin"))
+        self._mul_var    = tk.StringVar(value=str(REPO_ROOT / "lut" / "MBM_7.bin"))
         self._approx_var = tk.BooleanVar(value=True)
         self._build()
 
@@ -157,33 +178,26 @@ class QuickStartFrame(RunnerMixin, tk.Frame):
         ttk.Button(main, text="← Menu",
                    command=lambda: self.app.show_frame(MainMenuFrame)).pack(anchor="w")
 
-        controls = ttk.LabelFrame(main, text="Run Settings", padding=10)
-        controls.pack(fill="x", pady=(6, 0))
+        cfg = ttk.LabelFrame(main, text="Run Settings", padding=10)
+        cfg.pack(fill="x", pady=(6, 0))
 
-        ttk.Label(controls, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        ttk.Combobox(
-            controls,
-            textvariable=self._script_var,
-            values=["lenet300100.py", "mnist_example.py"],
-            state="readonly",
-            width=30,
-        ).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Label(cfg, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Combobox(cfg, textvariable=self._script_var,
+                     values=["lenet300100.py", "mnist_example.py"],
+                     state="readonly", width=30).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
 
-        ttk.Label(controls, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(controls, textvariable=self._mul_var, width=60).grid(
+        ttk.Label(cfg, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(cfg, textvariable=self._mul_var, width=60).grid(
             row=1, column=1, sticky="ew", padx=5, pady=5)
-        ttk.Button(controls, text="Browse", command=self._browse).grid(
-            row=1, column=2, padx=5, pady=5)
+        ttk.Button(cfg, text="Browse", command=self._browse).grid(row=1, column=2, padx=5, pady=5)
 
-        ttk.Checkbutton(controls, text="Use approximate mode",
-                        variable=self._approx_var).grid(
-            row=2, column=1, sticky="w", padx=5, pady=5)
-
-        controls.columnconfigure(1, weight=1)
+        ttk.Checkbutton(cfg, text="Use approximate mode",
+                        variable=self._approx_var).grid(row=2, column=1, sticky="w", padx=5, pady=5)
+        cfg.columnconfigure(1, weight=1)
 
         btns = ttk.Frame(main)
         btns.pack(fill="x", pady=(10, 6))
-        ttk.Button(btns, text="Run", command=self._do_run).pack(side="left", padx=5)
+        ttk.Button(btns, text="Run",  command=self._do_run).pack(side="left", padx=5)
         ttk.Button(btns, text="Stop", command=self._stop).pack(side="left", padx=5)
         ttk.Button(btns, text="Clear Log",
                    command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
@@ -195,14 +209,12 @@ class QuickStartFrame(RunnerMixin, tk.Frame):
         sb = ttk.Scrollbar(log_frame, command=log.yview)
         sb.pack(side="right", fill="y")
         log.configure(yscrollcommand=sb.set)
-
         self._init_runner(log)
 
     def _browse(self):
         path = filedialog.askopenfilename(
             title="Select LUT file",
-            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
-        )
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")])
         if path:
             self._mul_var.set(path)
 
@@ -220,20 +232,20 @@ class QuickStartFrame(RunnerMixin, tk.Frame):
         self._run(cmd)
 
 
-class BuildFrame(RunnerMixin, tk.Frame):
-    """Guided training builder — choose model, dataset, and multiplier via dropdowns."""
+# ─────────────────────────────────────────────────────────────────────────────
+# Build
+# ─────────────────────────────────────────────────────────────────────────────
 
+class BuildFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
         self.app = app
-
-        self._model_var = tk.StringVar(value=next(iter(MODELS)))
+        self._model_var   = tk.StringVar(value=next(iter(MODELS)))
         self._dataset_var = tk.StringVar(value=DATASETS[0])
         lut_default = "MBM_7.bin" if "MBM_7.bin" in LUT_FILES else next(iter(LUT_FILES))
-        self._lut_var = tk.StringVar(value=lut_default)
-        self._approx_var = tk.BooleanVar(value=True)
+        self._lut_var     = tk.StringVar(value=lut_default)
+        self._approx_var  = tk.BooleanVar(value=True)
         self._preview_var = tk.StringVar()
-
         self._build()
         self._refresh_preview()
 
@@ -244,55 +256,44 @@ class BuildFrame(RunnerMixin, tk.Frame):
         ttk.Button(main, text="← Menu",
                    command=lambda: self.app.show_frame(MainMenuFrame)).pack(anchor="w")
 
-        # ── Configuration panel ──────────────────────────────────────────
         cfg = ttk.LabelFrame(main, text="Build Configuration", padding=10)
         cfg.pack(fill="x", pady=(6, 0))
         cfg.columnconfigure(1, weight=1)
 
-        # Model
         ttk.Label(cfg, text="Model").grid(row=0, column=0, sticky="w", padx=5, pady=6)
         ttk.Combobox(cfg, textvariable=self._model_var,
                      values=list(MODELS.keys()), state="readonly", width=28).grid(
             row=0, column=1, sticky="ew", padx=5, pady=6)
 
-        # Dataset
         ttk.Label(cfg, text="Dataset").grid(row=1, column=0, sticky="w", padx=5, pady=6)
         ttk.Combobox(cfg, textvariable=self._dataset_var,
                      values=DATASETS, state="readonly", width=28).grid(
             row=1, column=1, sticky="ew", padx=5, pady=6)
 
-        # Multiplier LUT
         ttk.Label(cfg, text="Multiplier").grid(row=2, column=0, sticky="w", padx=5, pady=6)
-        lut_box = ttk.Combobox(cfg, textvariable=self._lut_var,
-                               values=list(LUT_FILES.keys()), state="readonly", width=28)
-        lut_box.grid(row=2, column=1, sticky="ew", padx=5, pady=6)
+        ttk.Combobox(cfg, textvariable=self._lut_var,
+                     values=list(LUT_FILES.keys()), state="readonly", width=28).grid(
+            row=2, column=1, sticky="ew", padx=5, pady=6)
         ttk.Label(cfg, text="(from lut/)").grid(row=2, column=2, sticky="w", padx=4)
 
-        # Approx mode
         ttk.Checkbutton(cfg, text="Approximate mode",
-                        variable=self._approx_var).grid(
-            row=3, column=1, sticky="w", padx=5, pady=6)
+                        variable=self._approx_var).grid(row=3, column=1, sticky="w", padx=5, pady=6)
 
-        # Bind all controls to refresh the preview
-        for var in (self._model_var, self._dataset_var,
-                    self._lut_var, self._approx_var):
+        for var in (self._model_var, self._dataset_var, self._lut_var, self._approx_var):
             var.trace_add("write", lambda *_: self._refresh_preview())
 
-        # ── Command preview ──────────────────────────────────────────────
-        prev_frame = ttk.LabelFrame(main, text="Command Preview", padding=6)
-        prev_frame.pack(fill="x", pady=(8, 0))
-        ttk.Label(prev_frame, textvariable=self._preview_var,
-                  font=("Courier", 9), anchor="w", wraplength=820).pack(fill="x")
+        prev = ttk.LabelFrame(main, text="Command Preview", padding=6)
+        prev.pack(fill="x", pady=(8, 0))
+        ttk.Label(prev, textvariable=self._preview_var,
+                  font=("Courier", 9), anchor="w", wraplength=880).pack(fill="x")
 
-        # ── Action buttons ───────────────────────────────────────────────
         btns = ttk.Frame(main)
         btns.pack(fill="x", pady=(8, 4))
-        ttk.Button(btns, text="Run", command=self._do_run).pack(side="left", padx=5)
+        ttk.Button(btns, text="Run",  command=self._do_run).pack(side="left", padx=5)
         ttk.Button(btns, text="Stop", command=self._stop).pack(side="left", padx=5)
         ttk.Button(btns, text="Clear Log",
                    command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
 
-        # ── Output log ───────────────────────────────────────────────────
         log_frame = ttk.LabelFrame(main, text="Output", padding=8)
         log_frame.pack(fill="both", expand=True, pady=(4, 0))
         log = tk.Text(log_frame, wrap="word", height=18)
@@ -300,22 +301,19 @@ class BuildFrame(RunnerMixin, tk.Frame):
         sb = ttk.Scrollbar(log_frame, command=log.yview)
         sb.pack(side="right", fill="y")
         log.configure(yscrollcommand=sb.set)
-
         self._init_runner(log)
 
     def _build_cmd(self):
         script = MODELS[self._model_var.get()]
-        script_path = REPO_ROOT / script
         lut_path = LUT_FILES[self._lut_var.get()]
-        cmd = [sys.executable, str(script_path), "--mul", str(lut_path)]
+        cmd = [sys.executable, str(REPO_ROOT / script), "--mul", str(lut_path)]
         if self._approx_var.get():
             cmd += ["--approx"]
         return cmd
 
     def _refresh_preview(self):
         try:
-            cmd = self._build_cmd()
-            self._preview_var.set(" ".join(cmd))
+            self._preview_var.set(" ".join(self._build_cmd()))
         except Exception as e:
             self._preview_var.set(f"(error: {e})")
 
@@ -325,27 +323,283 @@ class BuildFrame(RunnerMixin, tk.Frame):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
-        lut_path = LUT_FILES.get(self._lut_var.get())
-        if lut_path and not lut_path.exists():
-            messagebox.showerror("Error", f"LUT file not found: {lut_path}")
-            return
         self._run(cmd)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Maker — layer row widget
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LayerRow(tk.Frame):
+    """One row in the layer stack: [type ▼] [param fields …] [× remove]"""
+
+    def __init__(self, parent, on_change, on_remove, initial_type=None):
+        super().__init__(parent, relief="groove", bd=1, padx=4, pady=3)
+        self._on_change  = on_change
+        self._on_remove  = on_remove
+        self._param_vars = {}
+
+        self._type_var = tk.StringVar(value=initial_type or LAYER_NAMES[0])
+        self._type_var.trace_add("write", lambda *_: self._rebuild_params())
+
+        # Layer type dropdown (fixed left)
+        ttk.Combobox(self, textvariable=self._type_var,
+                     values=LAYER_NAMES, state="readonly", width=20).pack(side="left", padx=(0, 6))
+
+        # Dynamic param area
+        self._param_frame = tk.Frame(self)
+        self._param_frame.pack(side="left", fill="x", expand=True)
+
+        # Remove button (fixed right)
+        tk.Button(self, text="×", fg="red", width=2,
+                  relief="flat", command=self._on_remove).pack(side="right", padx=(6, 0))
+
+        self._rebuild_params()
+
+    def _rebuild_params(self):
+        for w in self._param_frame.winfo_children():
+            w.destroy()
+        self._param_vars.clear()
+
+        for p in LAYER_DEFS.get(self._type_var.get(), []):
+            tk.Label(self._param_frame, text=p["label"]).pack(side="left", padx=(6, 2))
+            var = tk.StringVar(value=str(p["default"]))
+            self._param_vars[p["name"]] = var
+
+            if p["type"] == "choice":
+                w = ttk.Combobox(self._param_frame, textvariable=var,
+                                 values=p["choices"], state="readonly", width=10)
+            else:
+                w = ttk.Entry(self._param_frame, textvariable=var, width=7)
+
+            w.pack(side="left", padx=2)
+            var.trace_add("write", lambda *_: self._on_change())
+
+        self._on_change()
+
+    def get_config(self):
+        return {
+            "type":   self._type_var.get(),
+            "params": {k: v.get() for k, v in self._param_vars.items()},
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model Maker frame
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ModelMakerFrame(RunnerMixin, tk.Frame):
+    def __init__(self, parent, app):
+        tk.Frame.__init__(self, parent)
+        self.app = app
+        self._rows: list[LayerRow] = []
+        self._build()
+        # Seed with a simple starter stack
+        for layer_type in ("Input (Flatten 28×28)", "Dense", "Dense", "Dense"):
+            self._add_row(initial_type=layer_type)
+
+    def _build(self):
+        # ── Top bar ──────────────────────────────────────────────────────────
+        top = ttk.Frame(self, padding=(12, 8, 12, 0))
+        top.pack(fill="x")
+        ttk.Button(top, text="← Menu",
+                   command=lambda: self.app.show_frame(MainMenuFrame)).pack(side="left")
+        tk.Label(top, text="Model Maker", font=("Helvetica", 16, "bold")).pack(side="left", padx=16)
+
+        # ── Main pane: layer stack (left) + code preview (right) ─────────────
+        paned = tk.PanedWindow(self, orient="horizontal", sashrelief="raised", sashwidth=5)
+        paned.pack(fill="both", expand=True, padx=12, pady=8)
+
+        # Left: scrollable layer stack
+        left = ttk.Frame(paned)
+        paned.add(left, minsize=380)
+
+        ttk.Label(left, text="Layers", font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 4))
+
+        # Scrollable canvas for layer rows
+        canvas_outer = tk.Frame(left, relief="sunken", bd=1)
+        canvas_outer.pack(fill="both", expand=True)
+
+        self._canvas = tk.Canvas(canvas_outer, highlightthickness=0)
+        vsb = ttk.Scrollbar(canvas_outer, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        self._stack_frame = tk.Frame(self._canvas)
+        self._canvas_window = self._canvas.create_window(
+            (0, 0), window=self._stack_frame, anchor="nw")
+
+        self._stack_frame.bind("<Configure>", self._on_stack_resize)
+        self._canvas.bind("<Configure>",      self._on_canvas_resize)
+
+        # Add layer button
+        ttk.Button(left, text="+ Add Layer", command=self._add_row).pack(pady=6)
+
+        # Right: code preview + run controls
+        right = ttk.Frame(paned)
+        paned.add(right, minsize=320)
+
+        ttk.Label(right, text="Generated Script",
+                  font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 4))
+
+        self._code_box = tk.Text(right, wrap="none", font=("Courier", 9),
+                                 state="disabled", height=18)
+        self._code_box.pack(fill="both", expand=True)
+        code_sb = ttk.Scrollbar(right, orient="horizontal", command=self._code_box.xview)
+        code_sb.pack(fill="x")
+        self._code_box.configure(xscrollcommand=code_sb.set)
+
+        btns = ttk.Frame(right)
+        btns.pack(fill="x", pady=(6, 4))
+        ttk.Button(btns, text="Run",      command=self._do_run).pack(side="left", padx=5)
+        ttk.Button(btns, text="Stop",     command=self._stop).pack(side="left", padx=5)
+        ttk.Button(btns, text="Save Script", command=self._save_script).pack(side="left", padx=5)
+        ttk.Button(btns, text="Clear Log",
+                   command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
+
+        log_frame = ttk.LabelFrame(right, text="Output", padding=6)
+        log_frame.pack(fill="both", expand=True)
+        log = tk.Text(log_frame, wrap="word", height=8, font=("Courier", 9))
+        log.pack(side="left", fill="both", expand=True)
+        log_sb = ttk.Scrollbar(log_frame, command=log.yview)
+        log_sb.pack(side="right", fill="y")
+        log.configure(yscrollcommand=log_sb.set)
+        self._init_runner(log)
+
+    # ── Scrollable canvas helpers ─────────────────────────────────────────────
+
+    def _on_stack_resize(self, _event):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_resize(self, event):
+        self._canvas.itemconfig(self._canvas_window, width=event.width)
+
+    # ── Layer row management ──────────────────────────────────────────────────
+
+    def _add_row(self, initial_type=None):
+        row = LayerRow(
+            self._stack_frame,
+            on_change=self._refresh_code,
+            on_remove=lambda r=None: self._remove_row(row),
+            initial_type=initial_type,
+        )
+        row.pack(fill="x", pady=2, padx=2)
+        self._rows.append(row)
+        self._refresh_code()
+
+    def _remove_row(self, row):
+        if row in self._rows:
+            self._rows.remove(row)
+            row.destroy()
+            self._refresh_code()
+
+    # ── Code generation ───────────────────────────────────────────────────────
+
+    def _generate_script(self):
+        configs = [r.get_config() for r in self._rows]
+        has_conv = any(c["type"] == "Conv2D" for c in configs)
+
+        if has_conv:
+            reshape = "x_train = x_train.reshape(-1, 28, 28, 1).astype('float32') / 255.0\n" \
+                      "x_test  = x_test.reshape(-1, 28, 28, 1).astype('float32') / 255.0"
+        else:
+            reshape = "x_train = x_train.reshape(-1, 784).astype('float32') / 255.0\n" \
+                      "x_test  = x_test.reshape(-1, 784).astype('float32') / 255.0"
+
+        layer_lines = []
+        for c in configs:
+            layer_lines.append("    " + self._layer_to_code(c) + ",")
+
+        layers_str = "\n".join(layer_lines) if layer_lines else "    # no layers defined"
+
+        return textwrap.dedent(f"""\
+            import tensorflow as tf
+
+            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+            {reshape}
+
+            model = tf.keras.Sequential([
+            {layers_str}
+            ])
+
+            model.compile(
+                optimizer='adam',
+                loss='sparse_categorical_crossentropy',
+                metrics=['accuracy'],
+            )
+            model.summary()
+            model.fit(x_train, y_train, epochs=5, batch_size=128, validation_split=0.1)
+            loss, acc = model.evaluate(x_test, y_test)
+            print(f"Test accuracy: {{acc:.4f}}")
+            """)
+
+    @staticmethod
+    def _layer_to_code(cfg):
+        t = cfg["type"]
+        p = cfg["params"]
+        if t == "Dense":
+            return f"tf.keras.layers.Dense({p['units']}, activation='{p['activation']}')"
+        if t == "Conv2D":
+            k = p["kernel_size"]
+            return (f"tf.keras.layers.Conv2D({p['filters']}, ({k}, {k}), "
+                    f"activation='{p['activation']}')")
+        if t == "Flatten":
+            return "tf.keras.layers.Flatten()"
+        if t == "Input (Flatten 28×28)":
+            return "tf.keras.layers.Flatten(input_shape=(28, 28))"
+        if t == "Dropout":
+            return f"tf.keras.layers.Dropout({p['rate']})"
+        if t == "MaxPooling2D":
+            s = p["pool_size"]
+            return f"tf.keras.layers.MaxPooling2D(({s}, {s}))"
+        if t == "BatchNormalization":
+            return "tf.keras.layers.BatchNormalization()"
+        return f"# unknown layer: {t}"
+
+    def _refresh_code(self):
+        code = self._generate_script()
+        self._code_box.configure(state="normal")
+        self._code_box.delete("1.0", tk.END)
+        self._code_box.insert(tk.END, code)
+        self._code_box.configure(state="disabled")
+
+    # ── Run / Save ────────────────────────────────────────────────────────────
+
+    def _do_run(self):
+        code = self._generate_script()
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False,
+            dir=REPO_ROOT, prefix="_approxtrain_maker_")
+        tmp.write(code)
+        tmp.close()
+        self._tmp_script = Path(tmp.name)
+        self._run([sys.executable, str(self._tmp_script)])
+
+    def _save_script(self):
+        path = filedialog.asksaveasfilename(
+            title="Save generated script",
+            defaultextension=".py",
+            filetypes=[("Python files", "*.py")],
+            initialdir=REPO_ROOT,
+        )
+        if path:
+            Path(path).write_text(self._generate_script())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Placeholder frames
+# ─────────────────────────────────────────────────────────────────────────────
 
 class CreditsFrame(tk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
-        self._build()
-
-    def _build(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-
         ttk.Button(self, text="← Menu",
-                   command=lambda: self.app.show_frame(MainMenuFrame)).grid(
+                   command=lambda: app.show_frame(MainMenuFrame)).grid(
             row=0, column=0, sticky="w", padx=12, pady=8)
-
         tk.Label(self, text="Credits", font=("Helvetica", 24, "bold")).grid(row=1, column=0)
 
 
@@ -353,16 +607,11 @@ class OptionsFrame(tk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
-        self._build()
-
-    def _build(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-
         ttk.Button(self, text="← Menu",
-                   command=lambda: self.app.show_frame(MainMenuFrame)).grid(
+                   command=lambda: app.show_frame(MainMenuFrame)).grid(
             row=0, column=0, sticky="w", padx=12, pady=8)
-
         tk.Label(self, text="Options", font=("Helvetica", 24, "bold")).grid(row=1, column=0)
 
 
