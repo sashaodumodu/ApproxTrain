@@ -73,12 +73,29 @@ class MetricsCollector:
 
         # Final step summary: contains "/step" but not "ETA"
         if self._epoch > 0 and '/step' in line and 'ETA' not in line:
+            # Map verbose Keras metric names to canonical keys
+            aliases = {
+                'loss':                          'loss',
+                'sparse_categorical_crossentropy': 'loss',
+                'binary_crossentropy':            'loss',
+                'accuracy':                       'accuracy',
+                'sparse_categorical_accuracy':    'accuracy',
+                'categorical_accuracy':           'accuracy',
+                'val_loss':                       'val_loss',
+                'val_sparse_categorical_crossentropy': 'val_loss',
+                'val_binary_crossentropy':        'val_loss',
+                'val_accuracy':                   'val_accuracy',
+                'val_sparse_categorical_accuracy': 'val_accuracy',
+                'val_categorical_accuracy':       'val_accuracy',
+            }
             vals = {}
-            for key in ('loss', 'accuracy', 'val_loss', 'val_accuracy'):
-                m2 = re.search(rf'\b{re.escape(key)}: ([0-9.eE+\-]+)', line)
+            for raw, canonical in aliases.items():
+                if canonical in vals:
+                    continue
+                m2 = re.search(rf'\b{re.escape(raw)}: ([0-9.eE+\-]+)', line)
                 if m2:
                     try:
-                        vals[key] = float(m2.group(1))
+                        vals[canonical] = float(m2.group(1))
                     except ValueError:
                         pass
             if vals:
@@ -241,6 +258,26 @@ class RunnerMixin:
             self._process.terminate()
             self._write("\n[Stop requested]\n")
 
+    def _save_csv(self):
+        import csv
+        data = self._metrics.data
+        epochs = data.get("epoch", [])
+        if not epochs:
+            messagebox.showinfo("No data", "No metrics collected yet.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save metrics CSV", defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")], initialdir=REPO_ROOT)
+        if not path:
+            return
+        keys = [k for k in METRIC_KEYS if k != "epoch"]
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["epoch"] + keys)
+            for i, epoch in enumerate(epochs):
+                writer.writerow([epoch] + [data[k][i] if i < len(data[k]) else "" for k in keys])
+        messagebox.showinfo("Saved", f"Metrics saved to:\n{path}")
+
     def _make_output_notebook(self, parent) -> tk.Text:
         """
         Build a ttk.Notebook with Log and Plot tabs.
@@ -341,7 +378,7 @@ class MainMenuFrame(tk.Frame):
 
         for label, cls in [
             ("Credits",     CreditsFrame),
-            ("Build",       BuildFrame),
+            ("Train",       BuildFrame),
             ("Model Maker", ModelMakerFrame),
             ("Options",     OptionsFrame),
         ]:
@@ -374,7 +411,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         ttk.Button(main, text="← Menu",
                    command=lambda: self.app.show_frame(MainMenuFrame)).pack(anchor="w")
 
-        cfg = ttk.LabelFrame(main, text="Build Configuration", padding=10)
+        cfg = ttk.LabelFrame(main, text="Train Configuration", padding=10)
         cfg.pack(fill="x", pady=(6, 0))
         cfg.columnconfigure(1, weight=1)
 
@@ -404,8 +441,9 @@ class BuildFrame(RunnerMixin, tk.Frame):
 
         btns = ttk.Frame(main)
         btns.pack(fill="x", pady=(8, 4))
-        ttk.Button(btns, text="Run",  command=self._do_run).pack(side="left", padx=5)
-        ttk.Button(btns, text="Stop", command=self._stop).pack(side="left", padx=5)
+        ttk.Button(btns, text="Run",      command=self._do_run).pack(side="left", padx=5)
+        ttk.Button(btns, text="Stop",     command=self._stop).pack(side="left", padx=5)
+        ttk.Button(btns, text="Save CSV", command=self._save_csv).pack(side="left", padx=5)
         ttk.Button(btns, text="Clear Log",
                    command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
 
@@ -432,7 +470,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         script = self._script_var.get().strip()
         if not script:
             raise ValueError("No script selected.")
-        cmd = [sys.executable, script]
+        cmd = [sys.executable, "-u",script]
         lut = self._lut_var.get().strip()
         if lut:
             cmd += ["--mul", lut]
@@ -452,8 +490,8 @@ class BuildFrame(RunnerMixin, tk.Frame):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
-        if not Path(cmd[1]).exists():
-            messagebox.showerror("Error", f"Script not found:\n{cmd[1]}")
+        if not Path(cmd[2]).exists():
+            messagebox.showerror("Error", f"Script not found:\n{cmd[2]}")
             return
         self._run(cmd)
 
@@ -578,6 +616,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         ttk.Button(btns, text="Run",         command=self._do_run).pack(side="left", padx=5)
         ttk.Button(btns, text="Stop",        command=self._stop).pack(side="left", padx=5)
         ttk.Button(btns, text="Save Script", command=self._save).pack(side="left", padx=5)
+        ttk.Button(btns, text="Save CSV",    command=self._save_csv).pack(side="left", padx=5)
         ttk.Button(btns, text="Clear Log",
                    command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
 
@@ -678,7 +717,7 @@ print(f"Test accuracy: {{acc:.4f}}")
             dir=REPO_ROOT, prefix="_approxtrain_maker_")
         tmp.write(code)
         tmp.close()
-        self._run([sys.executable, tmp.name])
+        self._run([sys.executable, "-u",tmp.name])
 
     def _save(self):
         path = filedialog.asksaveasfilename(
