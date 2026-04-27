@@ -15,11 +15,13 @@ parser = argparse.ArgumentParser()
 #parser.add_argument("--approx", type=bool, help="use approximate multiplier or not", default=False)
 parser.add_argument("--mul", type=str, default="lut/MBM_7.bin")
 parser.add_argument("--approx", action="store_true")
+parser.add_argument("--dataset", type=str, default="mnist",
+                    choices=["mnist", "fashion_mnist", "kmnist"])
 
 args = parser.parse_args()
 APPROX = args.approx
 (ds_train, ds_test), ds_info = tfds.load(
-    'mnist',
+    args.dataset,
     split=['train', 'test'],
     shuffle_files=True,
     as_supervised=True,

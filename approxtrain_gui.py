@@ -17,8 +17,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 REPO_ROOT = Path(__file__).resolve().parent
 
 LUT_FILES = {p.name: p for p in sorted((REPO_ROOT / "lut").glob("*.bin"))}
-MODELS    = {"LeNet-300-100": "lenet300100.py"}
-DATASETS  = ["MNIST"]
 
 LAYER_DEFS = {
     "Dense": [
@@ -290,7 +288,7 @@ class ApproxTrainGUI:
         self.container.grid_columnconfigure(0, weight=1)
 
         self.frames = {}
-        for cls in (MainMenuFrame, QuickStartFrame, BuildFrame,
+        for cls in (MainMenuFrame, BuildFrame,
                     ModelMakerFrame, CreditsFrame, OptionsFrame):
             f = cls(self.container, self)
             self.frames[cls] = f
@@ -343,7 +341,6 @@ class MainMenuFrame(tk.Frame):
 
         for label, cls in [
             ("Credits",     CreditsFrame),
-            ("Quick Start", QuickStartFrame),
             ("Build",       BuildFrame),
             ("Model Maker", ModelMakerFrame),
             ("Options",     OptionsFrame),
@@ -354,78 +351,6 @@ class MainMenuFrame(tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Quick Start
-# ─────────────────────────────────────────────────────────────────────────────
-
-class QuickStartFrame(RunnerMixin, tk.Frame):
-    def __init__(self, parent, app):
-        tk.Frame.__init__(self, parent)
-        self.app = app
-        self._script_var = tk.StringVar(value="lenet300100.py")
-        self._mul_var    = tk.StringVar(value=str(REPO_ROOT / "lut" / "MBM_7.bin"))
-        self._approx_var = tk.BooleanVar(value=True)
-        self._metrics    = MetricsCollector()
-        self._build()
-
-    def _build(self):
-        main = ttk.Frame(self, padding=12)
-        main.pack(fill="both", expand=True)
-
-        ttk.Button(main, text="← Menu",
-                   command=lambda: self.app.show_frame(MainMenuFrame)).pack(anchor="w")
-
-        cfg = ttk.LabelFrame(main, text="Run Settings", padding=10)
-        cfg.pack(fill="x", pady=(6, 0))
-
-        ttk.Label(cfg, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        ttk.Combobox(cfg, textvariable=self._script_var,
-                     values=["lenet300100.py", "mnist_example.py"],
-                     state="readonly", width=30
-                     ).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
-
-        ttk.Label(cfg, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(cfg, textvariable=self._mul_var, width=50
-                  ).grid(row=1, column=1, sticky="ew", padx=5, pady=5)
-        ttk.Button(cfg, text="Browse", command=self._browse
-                   ).grid(row=1, column=2, padx=5, pady=5)
-
-        ttk.Checkbutton(cfg, text="Use approximate mode",
-                        variable=self._approx_var
-                        ).grid(row=2, column=1, sticky="w", padx=5, pady=5)
-        cfg.columnconfigure(1, weight=1)
-
-        btns = ttk.Frame(main)
-        btns.pack(fill="x", pady=(8, 4))
-        ttk.Button(btns, text="Run",  command=self._do_run).pack(side="left", padx=5)
-        ttk.Button(btns, text="Stop", command=self._stop).pack(side="left", padx=5)
-        ttk.Button(btns, text="Clear Log",
-                   command=lambda: self._log.delete("1.0", tk.END)).pack(side="left", padx=5)
-
-        log = self._make_output_notebook(main)
-        self._init_runner(log, self._metrics)
-
-    def _browse(self):
-        p = filedialog.askopenfilename(
-            title="Select LUT file",
-            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")])
-        if p:
-            self._mul_var.set(p)
-
-    def _do_run(self):
-        script = self._script_var.get()
-        path   = REPO_ROOT / script
-        if not path.exists():
-            messagebox.showerror("Error", f"Script not found: {path}")
-            return
-        cmd = [sys.executable, str(path)]
-        if script == "lenet300100.py":
-            cmd += ["--mul", self._mul_var.get()]
-            if self._approx_var.get():
-                cmd += ["--approx"]
-        self._run(cmd)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Build
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -433,9 +358,8 @@ class BuildFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
         self.app = app
-        self._model_var   = tk.StringVar(value=next(iter(MODELS)))
-        self._dataset_var = tk.StringVar(value=DATASETS[0])
-        lut_default = "MBM_7.bin" if "MBM_7.bin" in LUT_FILES else next(iter(LUT_FILES))
+        lut_default = str(REPO_ROOT / "lut" / "MBM_7.bin") if (REPO_ROOT / "lut" / "MBM_7.bin").exists() else ""
+        self._script_var  = tk.StringVar(value=str(REPO_ROOT / "lenet300100.py"))
         self._lut_var     = tk.StringVar(value=lut_default)
         self._approx_var  = tk.BooleanVar(value=True)
         self._preview_var = tk.StringVar()
@@ -454,27 +378,23 @@ class BuildFrame(RunnerMixin, tk.Frame):
         cfg.pack(fill="x", pady=(6, 0))
         cfg.columnconfigure(1, weight=1)
 
-        ttk.Label(cfg, text="Model").grid(row=0, column=0, sticky="w", padx=5, pady=6)
-        ttk.Combobox(cfg, textvariable=self._model_var,
-                     values=list(MODELS.keys()), state="readonly", width=28
-                     ).grid(row=0, column=1, sticky="ew", padx=5, pady=6)
+        ttk.Label(cfg, text="Script").grid(row=0, column=0, sticky="w", padx=5, pady=6)
+        ttk.Entry(cfg, textvariable=self._script_var
+                  ).grid(row=0, column=1, sticky="ew", padx=5, pady=6)
+        ttk.Button(cfg, text="Browse", command=self._browse_script
+                   ).grid(row=0, column=2, padx=5, pady=6)
 
-        ttk.Label(cfg, text="Dataset").grid(row=1, column=0, sticky="w", padx=5, pady=6)
-        ttk.Combobox(cfg, textvariable=self._dataset_var,
-                     values=DATASETS, state="readonly", width=28
-                     ).grid(row=1, column=1, sticky="ew", padx=5, pady=6)
-
-        ttk.Label(cfg, text="Multiplier").grid(row=2, column=0, sticky="w", padx=5, pady=6)
-        ttk.Combobox(cfg, textvariable=self._lut_var,
-                     values=list(LUT_FILES.keys()), state="readonly", width=28
-                     ).grid(row=2, column=1, sticky="ew", padx=5, pady=6)
-        ttk.Label(cfg, text="(from lut/)").grid(row=2, column=2, sticky="w", padx=4)
+        ttk.Label(cfg, text="Multiplier LUT").grid(row=1, column=0, sticky="w", padx=5, pady=6)
+        ttk.Entry(cfg, textvariable=self._lut_var
+                  ).grid(row=1, column=1, sticky="ew", padx=5, pady=6)
+        ttk.Button(cfg, text="Browse", command=self._browse_lut
+                   ).grid(row=1, column=2, padx=5, pady=6)
 
         ttk.Checkbutton(cfg, text="Approximate mode",
                         variable=self._approx_var
-                        ).grid(row=3, column=1, sticky="w", padx=5, pady=6)
+                        ).grid(row=2, column=1, sticky="w", padx=5, pady=6)
 
-        for v in (self._model_var, self._dataset_var, self._lut_var, self._approx_var):
+        for v in (self._script_var, self._lut_var, self._approx_var):
             v.trace_add("write", lambda *_: self._refresh_preview())
 
         prev = ttk.LabelFrame(main, text="Command Preview", padding=6)
@@ -492,10 +412,30 @@ class BuildFrame(RunnerMixin, tk.Frame):
         log = self._make_output_notebook(main)
         self._init_runner(log, self._metrics)
 
+    def _browse_script(self):
+        p = filedialog.askopenfilename(
+            title="Select Python script",
+            initialdir=REPO_ROOT,
+            filetypes=[("Python files", "*.py"), ("All files", "*.*")])
+        if p:
+            self._script_var.set(p)
+
+    def _browse_lut(self):
+        p = filedialog.askopenfilename(
+            title="Select LUT file",
+            initialdir=REPO_ROOT / "lut",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")])
+        if p:
+            self._lut_var.set(p)
+
     def _build_cmd(self):
-        script   = MODELS[self._model_var.get()]
-        lut_path = LUT_FILES[self._lut_var.get()]
-        cmd = [sys.executable, str(REPO_ROOT / script), "--mul", str(lut_path)]
+        script = self._script_var.get().strip()
+        if not script:
+            raise ValueError("No script selected.")
+        cmd = [sys.executable, script]
+        lut = self._lut_var.get().strip()
+        if lut:
+            cmd += ["--mul", lut]
         if self._approx_var.get():
             cmd += ["--approx"]
         return cmd
@@ -511,6 +451,9 @@ class BuildFrame(RunnerMixin, tk.Frame):
             cmd = self._build_cmd()
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            return
+        if not Path(cmd[1]).exists():
+            messagebox.showerror("Error", f"Script not found:\n{cmd[1]}")
             return
         self._run(cmd)
 
