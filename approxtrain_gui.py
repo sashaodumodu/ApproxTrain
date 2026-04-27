@@ -7,7 +7,6 @@ import queue
 import threading
 import subprocess
 import tempfile
-import textwrap
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -654,26 +653,27 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             "    " + self._layer_code(c) + "," for c in cfgs
         ) or "    # no layers defined"
 
-        return textwrap.dedent(f"""\
-            import tensorflow as tf
+        return (
+f"""import tensorflow as tf
 
-            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
-            {reshape}
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+{reshape}
 
-            model = tf.keras.Sequential([
-            {layer_lines}
-            ])
+model = tf.keras.Sequential([
+{layer_lines}
+])
 
-            model.compile(
-                optimizer='adam',
-                loss='sparse_categorical_crossentropy',
-                metrics=['accuracy'],
-            )
-            model.summary()
-            model.fit(x_train, y_train, epochs=5, batch_size=128, validation_split=0.1)
-            loss, acc = model.evaluate(x_test, y_test)
-            print(f"Test accuracy: {{acc:.4f}}")
-            """)
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy'],
+)
+model.summary()
+model.fit(x_train, y_train, epochs=5, batch_size=128, validation_split=0.1)
+loss, acc = model.evaluate(x_test, y_test)
+print(f"Test accuracy: {{acc:.4f}}")
+"""
+        )
 
     @staticmethod
     def _layer_code(cfg):
