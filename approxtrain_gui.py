@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from tkinter import font as tkfont
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -254,7 +255,7 @@ class RunnerMixin:
         # Log tab
         log_frame = tk.Frame(nb)
         nb.add(log_frame, text="Log")
-        log = tk.Text(log_frame, wrap="word", font=("Courier", 9))
+        log = tk.Text(log_frame, wrap="word", font=self.app.fonts["mono"])
         log.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(log_frame, command=log.yview)
         sb.pack(side="right", fill="y")
@@ -275,10 +276,13 @@ class RunnerMixin:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ApproxTrainGUI:
+    BASE_FONT_SIZE = 12
+
     def __init__(self, root):
         self.root = root
         self.root.title("ApproxTrain")
         self.root.geometry("960x680")
+        self._init_fonts(self.BASE_FONT_SIZE)
 
         self.container = tk.Frame(self.root)
         self.container.pack(fill="both", expand=True)
@@ -297,6 +301,24 @@ class ApproxTrainGUI:
     def show_frame(self, cls):
         self.frames[cls].tkraise()
 
+    def _init_fonts(self, base):
+        self.fonts = {
+            "title":    tkfont.Font(family="Helvetica", size=base * 4,     weight="bold"),
+            "page":     tkfont.Font(family="Helvetica", size=base * 2,     weight="bold"),
+            "section":  tkfont.Font(family="Helvetica", size=base + 4,     weight="bold"),
+            "subhead":  tkfont.Font(family="Helvetica", size=base - 1,     weight="bold"),
+            "body":     tkfont.Font(family="Helvetica", size=base),
+            "mono":     tkfont.Font(family="Courier",   size=max(base - 3, 7)),
+        }
+
+    def set_base_font_size(self, base):
+        self.fonts["title"].configure(size=base * 4)
+        self.fonts["page"].configure(size=base * 2)
+        self.fonts["section"].configure(size=base + 4)
+        self.fonts["subhead"].configure(size=max(base - 1, 7))
+        self.fonts["body"].configure(size=base)
+        self.fonts["mono"].configure(size=max(base - 3, 7))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main menu
@@ -314,7 +336,7 @@ class MainMenuFrame(tk.Frame):
         self.rowconfigure(1, weight=1)
 
         tk.Label(self, text="ApproxTrain",
-                 font=("Helvetica", 48, "bold")).grid(row=0, column=0, pady=(80, 20))
+                 font=self.app.fonts["title"]).grid(row=0, column=0, pady=(80, 20))
 
         btn_frame = tk.Frame(self)
         btn_frame.grid(row=1, column=0)
@@ -458,7 +480,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         prev = ttk.LabelFrame(main, text="Command Preview", padding=6)
         prev.pack(fill="x", pady=(8, 0))
         ttk.Label(prev, textvariable=self._preview_var,
-                  font=("Courier", 9), anchor="w", wraplength=900).pack(fill="x")
+                  font=self.app.fonts["mono"], anchor="w", wraplength=900).pack(fill="x")
 
         btns = ttk.Frame(main)
         btns.pack(fill="x", pady=(8, 4))
@@ -562,7 +584,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         ttk.Button(top, text="← Menu",
                    command=lambda: self.app.show_frame(MainMenuFrame)).pack(side="left")
         tk.Label(top, text="Model Maker",
-                 font=("Helvetica", 16, "bold")).pack(side="left", padx=16)
+                 font=self.app.fonts["section"]).pack(side="left", padx=16)
 
         paned = tk.PanedWindow(self, orient="horizontal",
                                sashrelief="raised", sashwidth=5)
@@ -573,7 +595,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         paned.add(left, minsize=360)
 
         ttk.Label(left, text="Layers",
-                  font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 4))
+                  font=self.app.fonts["subhead"]).pack(anchor="w", pady=(0, 4))
 
         canvas_outer = tk.Frame(left, relief="sunken", bd=1)
         canvas_outer.pack(fill="both", expand=True)
@@ -599,9 +621,9 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         paned.add(right, minsize=340)
 
         ttk.Label(right, text="Generated Script",
-                  font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 4))
+                  font=self.app.fonts["subhead"]).pack(anchor="w", pady=(0, 4))
 
-        self._code_box = tk.Text(right, wrap="none", font=("Courier", 9),
+        self._code_box = tk.Text(right, wrap="none", font=self.app.fonts["mono"],
                                  state="disabled", height=14)
         self._code_box.pack(fill="x")
         xsb = ttk.Scrollbar(right, orient="horizontal", command=self._code_box.xview)
@@ -739,10 +761,10 @@ class CreditsFrame(tk.Frame):
                    command=lambda: app.show_frame(MainMenuFrame)
                    ).grid(row=0, column=0, sticky="w", padx=12, pady=8)
         tk.Label(self, text="Credits",
-                 font=("Helvetica", 24, "bold")).grid(row=1, column=0, pady=(0, 8))
+                 font=app.fonts["page"]).grid(row=1, column=0, pady=(0, 8))
 
         text = self._load_credits()
-        tk.Label(self, text=text, font=("Helvetica", 12),
+        tk.Label(self, text=text, font=app.fonts["body"],
                  justify="center", wraplength=600).grid(row=2, column=0, padx=20)
 
     def _load_credits(self):
@@ -756,13 +778,26 @@ class CreditsFrame(tk.Frame):
 class OptionsFrame(tk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent)
+        self._app = app
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
         ttk.Button(self, text="← Menu",
                    command=lambda: app.show_frame(MainMenuFrame)
                    ).grid(row=0, column=0, sticky="w", padx=12, pady=8)
         tk.Label(self, text="Options",
-                 font=("Helvetica", 24, "bold")).grid(row=1, column=0)
+                 font=app.fonts["page"]).grid(row=1, column=0, pady=(0, 20))
+
+        settings = ttk.Frame(self)
+        settings.grid(row=2, column=0, sticky="n")
+
+        ttk.Label(settings, text="Font Size").grid(row=0, column=0, sticky="w", padx=12, pady=6)
+        self._font_var = tk.IntVar(value=app.BASE_FONT_SIZE)
+        scale = ttk.Scale(settings, from_=8, to=22, orient="horizontal",
+                          variable=self._font_var, length=200,
+                          command=lambda v: app.set_base_font_size(int(float(v))))
+        scale.grid(row=0, column=1, padx=8)
+        self._size_label = ttk.Label(settings, textvariable=self._font_var, width=3)
+        self._size_label.grid(row=0, column=2, padx=(0, 12))
 
 
 if __name__ == "__main__":
