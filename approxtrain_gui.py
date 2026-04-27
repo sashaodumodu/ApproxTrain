@@ -1,3 +1,4 @@
+import os
 import sys
 import re
 import math
@@ -727,15 +728,29 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CreditsFrame(tk.Frame):
+    CREDITS_FILE = os.path.join(os.path.dirname(__file__), "credits.txt")
+
     def __init__(self, parent, app):
         super().__init__(parent)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=3)
         ttk.Button(self, text="← Menu",
                    command=lambda: app.show_frame(MainMenuFrame)
                    ).grid(row=0, column=0, sticky="w", padx=12, pady=8)
         tk.Label(self, text="Credits",
-                 font=("Helvetica", 24, "bold")).grid(row=1, column=0)
+                 font=("Helvetica", 24, "bold")).grid(row=1, column=0, pady=(0, 8))
+
+        text = self._load_credits()
+        tk.Label(self, text=text, font=("Helvetica", 12),
+                 justify="center", wraplength=600).grid(row=2, column=0, padx=20)
+
+    def _load_credits(self):
+        try:
+            with open(self.CREDITS_FILE, "r") as f:
+                return f.read()
+        except FileNotFoundError:
+            return "(credits.txt not found)"
 
 
 class OptionsFrame(tk.Frame):
