@@ -104,7 +104,8 @@ class MetricsCollector:
                 self.data["elapsed_s"].append(elapsed)
                 for key in ('loss', 'accuracy', 'val_loss', 'val_accuracy'):
                     self.data[key].append(vals.get(key, float('nan')))
-                self.dirty = True
+                self.dirty  = True
+                self._epoch = 0  # prevent evaluate/extra /step lines being recorded
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +319,11 @@ class ApproxTrainGUI:
         self.root.title("ApproxTrain")
         self.root.geometry("960x680")
         self._init_fonts(self.BASE_FONT_SIZE)
+        for f in REPO_ROOT.glob("_approxtrain_maker_*.py"):
+            try:
+                f.unlink()
+            except FileNotFoundError:
+                pass
 
         self.container = tk.Frame(self.root)
         self.container.pack(fill="both", expand=True)
@@ -395,8 +401,8 @@ class BuildFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
         self.app = app
-        lut_default = str(REPO_ROOT / "lut" / "MBM_7.bin") if (REPO_ROOT / "lut" / "MBM_7.bin").exists() else ""
-        self._script_var  = tk.StringVar(value=str(REPO_ROOT / "lenet300100.py"))
+        lut_default = "lut/MBM_7.bin" if (REPO_ROOT / "lut" / "MBM_7.bin").exists() else ""
+        self._script_var  = tk.StringVar(value="lenet300100.py")
         self._lut_var     = tk.StringVar(value=lut_default)
         self._approx_var  = tk.BooleanVar(value=True)
         self._preview_var = tk.StringVar()
@@ -456,7 +462,10 @@ class BuildFrame(RunnerMixin, tk.Frame):
             initialdir=REPO_ROOT,
             filetypes=[("Python files", "*.py"), ("All files", "*.*")])
         if p:
-            self._script_var.set(p)
+            try:
+                self._script_var.set(str(Path(p).relative_to(REPO_ROOT)))
+            except ValueError:
+                self._script_var.set(p)
 
     def _browse_lut(self):
         p = filedialog.askopenfilename(
@@ -464,7 +473,10 @@ class BuildFrame(RunnerMixin, tk.Frame):
             initialdir=REPO_ROOT / "lut",
             filetypes=[("Binary files", "*.bin"), ("All files", "*.*")])
         if p:
-            self._lut_var.set(p)
+            try:
+                self._lut_var.set(str(Path(p).relative_to(REPO_ROOT)))
+            except ValueError:
+                self._lut_var.set(p)
 
     def _build_cmd(self):
         script = self._script_var.get().strip()
@@ -490,7 +502,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
-        if not Path(cmd[2]).exists():
+        if not (REPO_ROOT / cmd[2]).exists():
             messagebox.showerror("Error", f"Script not found:\n{cmd[2]}")
             return
         self._run(cmd)
@@ -549,15 +561,30 @@ class LayerRow(tk.Frame):
 # Model Maker frame
 # ─────────────────────────────────────────────────────────────────────────────
 
+MAKER_DATASETS = {
+    "MNIST":         "mnist",
+    "Fashion-MNIST": "fashion_mnist",
+    "KMNIST":        "kmnist",
+}
+
 class ModelMakerFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
-        self.app      = app
-        self._rows = []
-        self._metrics = MetricsCollector()
+        self.app          = app
+        self._rows               = []
+        self._dataset_var        = tk.StringVar(value="MNIST")
+        self._custom_dataset_var = tk.StringVar()
+        self._epochs_var         = tk.IntVar(value=5)
+        self._batch_var          = tk.IntVar(value=128)
+        self._lr_var             = tk.StringVar(value="0.001")
+        lut_default = "lut/MBM_7.bin" if (REPO_ROOT / "lut" / "MBM_7.bin").exists() else ""
+        self._approx_var         = tk.BooleanVar(value=False)
+        self._lut_var            = tk.StringVar(value=lut_default)
+        self._metrics            = MetricsCollector()
         self._build()
-        for t in ("Input (Flatten 28×28)", "Dense", "Dense", "Dense"):
+        for t in ("Input (Flatten 28×28)", "Dense", "Dense"):
             self._add_row(initial_type=t)
+        self._add_output_row()
 
     def _build(self):
         top = ttk.Frame(self, padding=(12, 8, 12, 0))
@@ -566,6 +593,46 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
                    command=lambda: self.app.show_frame(MainMenuFrame)).pack(side="left")
         tk.Label(top, text="Model Maker",
                  font=self.app.fonts["section"]).pack(side="left", padx=16)
+
+        params = ttk.Frame(self, padding=(12, 0, 12, 4))
+        params.pack(fill="x")
+
+        tk.Label(params, text="Dataset:").pack(side="left", padx=(0, 4))
+        ds_frame = ttk.Frame(params)
+        ds_frame.pack(side="left")
+        ttk.Combobox(ds_frame, textvariable=self._dataset_var,
+                     values=list(MAKER_DATASETS.keys()) + ["Custom…"],
+                     state="readonly", width=14).pack(side="left")
+        self._custom_entry = ttk.Entry(ds_frame, textvariable=self._custom_dataset_var, width=16)
+        self._custom_entry.pack(side="left", padx=(4, 0))
+        self._custom_entry.pack_forget()
+        self._dataset_var.trace_add("write", lambda *_: self._on_dataset_change())
+        self._custom_dataset_var.trace_add("write", lambda *_: self._refresh_code())
+
+        tk.Label(params, text="Epochs:").pack(side="left", padx=(16, 4))
+        tk.Spinbox(params, textvariable=self._epochs_var, from_=1, to=1000,
+                   width=5, command=self._refresh_code).pack(side="left")
+        self._epochs_var.trace_add("write", lambda *_: self._refresh_code())
+
+        tk.Label(params, text="Batch:").pack(side="left", padx=(12, 4))
+        ttk.Combobox(params, textvariable=self._batch_var,
+                     values=[32, 64, 128, 256, 512], width=6).pack(side="left")
+        self._batch_var.trace_add("write", lambda *_: self._refresh_code())
+
+        tk.Label(params, text="LR:").pack(side="left", padx=(12, 4))
+        ttk.Combobox(params, textvariable=self._lr_var,
+                     values=["0.1", "0.01", "0.001", "0.0001", "0.00001"], width=8).pack(side="left")
+        self._lr_var.trace_add("write", lambda *_: self._refresh_code())
+
+        approx_row = ttk.Frame(self, padding=(12, 0, 12, 6))
+        approx_row.pack(fill="x")
+        ttk.Checkbutton(approx_row, text="Approximate mode",
+                        variable=self._approx_var,
+                        command=self._refresh_code).pack(side="left")
+        tk.Label(approx_row, text="LUT:").pack(side="left", padx=(16, 4))
+        ttk.Entry(approx_row, textvariable=self._lut_var, width=40).pack(side="left")
+        ttk.Button(approx_row, text="Browse", command=self._browse_lut).pack(side="left", padx=(4, 0))
+        self._lut_var.trace_add("write", lambda *_: self._refresh_code())
 
         paned = tk.PanedWindow(self, orient="horizontal",
                                sashrelief="raised", sashwidth=5)
@@ -625,6 +692,37 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
 
     # ── Layer management ──────────────────────────────────────────────────────
 
+    def _add_output_row(self):
+        row = LayerRow(self._stack,
+                       on_change=self._refresh_code,
+                       on_remove=lambda r=None: self._remove_row(row),
+                       initial_type="Dense")
+        row.pack(fill="x", pady=2, padx=2)
+        self._rows.append(row)
+        try:
+            row._param_vars["units"].set(10)
+            row._param_vars["activation"].set("softmax")
+        except (KeyError, tk.TclError):
+            pass
+        self._refresh_code()
+
+    def _browse_lut(self):
+        p = filedialog.askopenfilename(
+            title="Select LUT file", initialdir=REPO_ROOT / "lut",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")])
+        if p:
+            try:
+                self._lut_var.set(str(Path(p).relative_to(REPO_ROOT)))
+            except ValueError:
+                self._lut_var.set(p)
+
+    def _on_dataset_change(self):
+        if self._dataset_var.get() == "Custom…":
+            self._custom_entry.pack(side="left", padx=(4, 0))
+        else:
+            self._custom_entry.pack_forget()
+        self._refresh_code()
+
     def _add_row(self, initial_type=None):
         row = LayerRow(self._stack,
                        on_change=self._refresh_code,
@@ -647,20 +745,42 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         has_conv = any(c["type"] == "Conv2D" for c in cfgs)
 
         if has_conv:
-            reshape = ("x_train = x_train.reshape(-1, 28, 28, 1).astype('float32') / 255.0\n"
-                       "x_test  = x_test.reshape(-1, 28, 28, 1).astype('float32') / 255.0")
+            reshape = ("x_train = x_train.astype('float32') / 255.0\n"
+                       "x_test  = x_test.astype('float32') / 255.0")
         else:
-            reshape = ("x_train = x_train.reshape(-1, 784).astype('float32') / 255.0\n"
-                       "x_test  = x_test.reshape(-1, 784).astype('float32') / 255.0")
+            reshape = ("x_train = x_train.reshape(x_train.shape[0], -1).astype('float32') / 255.0\n"
+                       "x_test  = x_test.reshape(x_test.shape[0], -1).astype('float32') / 255.0")
+
+        approx  = self._approx_var.get()
+        lut     = self._lut_var.get().strip()
 
         layer_lines = "\n".join(
-            "    " + self._layer_code(c) + "," for c in cfgs
+            "    " + self._layer_code(c, approx, lut) + "," for c in cfgs
         ) or "    # no layers defined"
+
+        selected = self._dataset_var.get()
+        dataset_id = self._custom_dataset_var.get().strip() if selected == "Custom…" else MAKER_DATASETS[selected]
+        if not dataset_id:
+            dataset_id = "mnist"
+
+        try:
+            lut_rel = str(Path(lut).relative_to(REPO_ROOT)) if lut else ""
+        except ValueError:
+            lut_rel = lut
+        approx_imports = (
+            "from python.keras.layers.amdenselayer import denseam\n"
+            "from python.keras.layers.am_convolutional import AMConv2D\n"
+            f"LUT = '{lut_rel}'\n"
+        ) if approx else ""
 
         return (
 f"""import tensorflow as tf
+import tensorflow_datasets as tfds
+import numpy as np
+{approx_imports}
 
-(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+(x_train, y_train), (x_test, y_test) = tfds.as_numpy(tfds.load(
+    '{dataset_id}', split=['train', 'test'], batch_size=-1, as_supervised=True))
 {reshape}
 
 model = tf.keras.Sequential([
@@ -668,30 +788,35 @@ model = tf.keras.Sequential([
 ])
 
 model.compile(
-    optimizer='adam',
+    optimizer=tf.keras.optimizers.Adam({self._lr_var.get()}),
     loss='sparse_categorical_crossentropy',
     metrics=['accuracy'],
 )
+model.fit(x_train, y_train, epochs={self._epochs_var.get()}, batch_size={self._batch_var.get()}, validation_split=0.1)
 model.summary()
-model.fit(x_train, y_train, epochs=5, batch_size=128, validation_split=0.1)
 loss, acc = model.evaluate(x_test, y_test)
 print(f"Test accuracy: {{acc:.4f}}")
 """
         )
 
     @staticmethod
-    def _layer_code(cfg):
+    def _layer_code(cfg, approx=False, lut=""):
         t, p = cfg["type"], cfg["params"]
         if t == "Dense":
+            if approx and lut:
+                return f"denseam({p['units']}, activation='{p['activation']}', mant_mul_lut=LUT)"
             return f"tf.keras.layers.Dense({p['units']}, activation='{p['activation']}')"
         if t == "Conv2D":
             k = p["kernel_size"]
+            if approx and lut:
+                return (f"AMConv2D({p['filters']}, ({k}, {k}), "
+                        f"activation='{p['activation']}', mant_mul_lut=LUT)")
             return (f"tf.keras.layers.Conv2D({p['filters']}, ({k}, {k}), "
                     f"activation='{p['activation']}')")
         if t == "Flatten":
             return "tf.keras.layers.Flatten()"
         if t == "Input (Flatten 28×28)":
-            return "tf.keras.layers.Flatten(input_shape=(28, 28))"
+            return "tf.keras.layers.Flatten(input_shape=x_train.shape[1:])"
         if t == "Dropout":
             return f"tf.keras.layers.Dropout({p['rate']})"
         if t == "MaxPooling2D":
@@ -702,7 +827,10 @@ print(f"Test accuracy: {{acc:.4f}}")
         return f"# unknown layer: {t}"
 
     def _refresh_code(self):
-        code = self._generate()
+        try:
+            code = self._generate()
+        except (ValueError, tk.TclError):
+            return
         self._code_box.configure(state="normal")
         self._code_box.delete("1.0", tk.END)
         self._code_box.insert(tk.END, code)
@@ -717,7 +845,7 @@ print(f"Test accuracy: {{acc:.4f}}")
             dir=REPO_ROOT, prefix="_approxtrain_maker_")
         tmp.write(code)
         tmp.close()
-        self._run([sys.executable, "-u",tmp.name])
+        self._run([sys.executable, "-u", tmp.name])
 
     def _save(self):
         path = filedialog.asksaveasfilename(
@@ -732,7 +860,7 @@ print(f"Test accuracy: {{acc:.4f}}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CreditsFrame(tk.Frame):
-    CREDITS_FILE = os.path.join(os.path.dirname(__file__), "credits.txt")
+    CREDITS_FILE = REPO_ROOT / "credits.txt"
 
     def __init__(self, parent, app):
         super().__init__(parent)
