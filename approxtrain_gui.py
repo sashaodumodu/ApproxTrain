@@ -1,3 +1,14 @@
+#ApproxTrain GUI, built with Tkinter. Allows building simple Keras models with approximate layers, running training scripts, and visualizing metrics.
+#Note: this is a demo GUI for ApproxTrain, not a general-purpose Keras model builder. 
+# Generates simple scripts with a fixed training loop and limited layer types, designed to be compatible with ApproxTrain's approximate layers and multiplier LUTs. 
+# The "Train" page allows running arbitrary scripts but without the code generation features.
+
+#Developed by Sasha Odumodu and Khadijah Bashir
+#AI Disclosure: Traditional as well as AI-generated code was used in the development of this GUI.
+#All credits go to the original ApproxTrain team for their work on the underlying training framework and approximate layers.
+
+#For future contributors, it is encouraged to add more to the options frame for accessibility, and expand model maker's capabilities.
+
 import os
 import sys
 import re
@@ -18,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 LUT_FILES = {p.name: p for p in sorted((REPO_ROOT / "lut").glob("*.bin"))}
 
+#Layer definitions for the Model maker page, following basic keras layer parameters.
 LAYER_DEFS = {
     "Dense": [
         {"name": "units",      "label": "Units",      "type": "int",    "default": 128},
@@ -45,8 +57,10 @@ LAYER_NAMES = list(LAYER_DEFS.keys())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Metrics collection
+# Parses stdout lines from Keras during training
 # ─────────────────────────────────────────────────────────────────────────────
 
+#Metric keys are what are looked for in the keras output during model training. The GUI looks for these keys to populate the plot and csv export data
 METRIC_KEYS = ["epoch", "elapsed_s", "loss", "accuracy", "val_loss", "val_accuracy"]
 
 
@@ -58,13 +72,13 @@ class MetricsCollector:
 
     def reset(self):
         self.data  = {k: [] for k in METRIC_KEYS}
-        self._epoch = 0
-        self._t0    = None
-        self.dirty  = False
+        self._epoch = 0 #current epoch being parsed
+        self._t0    = None #timestamp of first epoch, for elapsed time calculation
+        self.dirty  = False # whether new data has arrived since last plot refresh
 
     def feed(self, line: str):
         # "Epoch 3/10"
-        m = re.match(r'Epoch (\d+)/\d+', line.strip())
+        m = re.match(r'Epoch (\d+)/\d+', line.strip()) #look for epoch number in the line
         if m:
             self._epoch = int(m.group(1))
             if self._t0 is None:
@@ -73,7 +87,7 @@ class MetricsCollector:
 
         # Final step summary: contains "/step" but not "ETA"
         if self._epoch > 0 and '/step' in line and 'ETA' not in line:
-            # Map verbose Keras metric names to canonical keys
+            # Map verbose Keras metric names to canonical keys, since different scripts may use different metrics or formats.
             aliases = {
                 'loss':                          'loss',
                 'sparse_categorical_crossentropy': 'loss',
@@ -92,7 +106,7 @@ class MetricsCollector:
             for raw, canonical in aliases.items():
                 if canonical in vals:
                     continue
-                m2 = re.search(rf'\b{re.escape(raw)}: ([0-9.eE+\-]+)', line)
+                m2 = re.search(rf'\b{re.escape(raw)}: ([0-9.eE+\-]+)', line) 
                 if m2:
                     try:
                         vals[canonical] = float(m2.group(1))
@@ -110,6 +124,9 @@ class MetricsCollector:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Plot panel
+# This is the embedded matplotlib graphing panel used for visualizing training metrics.
+# Allows the user to select metrics to plot on X, Y, and Y2
+# Refreshes automatically when new data arrives
 # ─────────────────────────────────────────────────────────────────────────────
 
 _Y2_NONE = "— none —"
@@ -194,13 +211,16 @@ class PlotPanel(tk.Frame):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared runner mixin
+# Provides subprocess management by feeding stdout lines into a queue, which are then processed
+# Threads are important in this step to avoid blocking the GUI while waiting for the training to fully complete.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RunnerMixin:
     """Subprocess management + metrics feeding + auto plot refresh."""
 
+    #Called by frames to set up subprocess management.
     def _init_runner(self, log_widget: tk.Text, metrics: MetricsCollector):
-        self._log            = log_widget
+        self._log            = log_widget #where output lines are written
         self._queue          = queue.Queue()
         self._process        = None
         self._metrics        = metrics
@@ -208,6 +228,7 @@ class RunnerMixin:
         self._last_plot_time = 0.0
         self._poll()
 
+    #Called in the main thread to process lines from subprocess and update
     def _poll(self):
         while not self._queue.empty():
             line = self._queue.get()
@@ -225,10 +246,12 @@ class RunnerMixin:
 
         self.after(100, self._poll)
 
+    #Write text to widget
     def _write(self, text: str):
         self._log.insert(tk.END, text)
         self._log.see(tk.END)
 
+    #Run the command in  a subprocess and feed output to queue
     def _run(self, cmd):
         if self._process is not None and self._process.poll() is None:
             messagebox.showwarning("Already running", "A process is already running.")
@@ -237,6 +260,7 @@ class RunnerMixin:
         self._write(f"\n$ {' '.join(cmd)}\n")
         threading.Thread(target=self._run_thread, args=(cmd,), daemon=True).start()
 
+    #Target of thread that runs the subprocess
     def _run_thread(self, cmd):
         try:
             self._process = subprocess.Popen(
@@ -254,11 +278,14 @@ class RunnerMixin:
         finally:
             self._process = None
 
+    #If "stop" is pressed, it terminates the subprocess, as long as it's running.
+    #Writes a log, "Stop requested" as user feedback
     def _stop(self):
         if self._process is not None and self._process.poll() is None:
             self._process.terminate()
             self._write("\n[Stop requested]\n")
 
+    #Used to save the CSV from the collected metrics from the model output.
     def _save_csv(self):
         import csv
         data = self._metrics.data
@@ -266,17 +293,20 @@ class RunnerMixin:
         if not epochs:
             messagebox.showinfo("No data", "No metrics collected yet.")
             return
+        # Ask the user where to save the file
         path = filedialog.asksaveasfilename(
             title="Save metrics CSV", defaultextension=".csv",
             filetypes=[("CSV files", "*.csv")], initialdir=REPO_ROOT)
         if not path:
             return
         keys = [k for k in METRIC_KEYS if k != "epoch"]
+        # Write the CSV with header and rows per epoch. If there are missing values, fill as an empty string
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["epoch"] + keys)
             for i, epoch in enumerate(epochs):
                 writer.writerow([epoch] + [data[k][i] if i < len(data[k]) else "" for k in keys])
+        #Confirm file saved
         messagebox.showinfo("Saved", f"Metrics saved to:\n{path}")
 
     def _make_output_notebook(self, parent) -> tk.Text:
@@ -309,16 +339,20 @@ class RunnerMixin:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App controller
+# This is the main application class that initalizes the window and acts as a manager for different pages/frames.
+# Handles font size, for accessibility. 
+# Cleans up any temporary model maker files on startup.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ApproxTrainGUI:
-    BASE_FONT_SIZE = 12
+    BASE_FONT_SIZE = 12 #Default font size
 
     def __init__(self, root):
         self.root = root
         self.root.title("ApproxTrain")
         self.root.geometry("960x680")
         self._init_fonts(self.BASE_FONT_SIZE)
+        #Cleaning temporary model maker files
         for f in REPO_ROOT.glob("_approxtrain_maker_*.py"):
             try:
                 f.unlink()
@@ -330,8 +364,9 @@ class ApproxTrainGUI:
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
+        #Frame initialization
         self.frames = {}
-        for cls in (MainMenuFrame, BuildFrame,
+        for cls in (MainMenuFrame, TrainFrame,
                     ModelMakerFrame, CreditsFrame, OptionsFrame):
             f = cls(self.container, self)
             self.frames[cls] = f
@@ -342,6 +377,7 @@ class ApproxTrainGUI:
     def show_frame(self, cls):
         self.frames[cls].tkraise()
 
+    #Font management
     def _init_fonts(self, base):
         self.fonts = {
             "title":    tkfont.Font(family="Helvetica", size=base * 4,     weight="bold"),
@@ -352,6 +388,7 @@ class ApproxTrainGUI:
             "mono":     tkfont.Font(family="Courier",   size=max(base - 3, 7)),
         }
 
+    #Manages the changing of the font size of the GUI
     def set_base_font_size(self, base):
         self.fonts["title"].configure(size=base * 4)
         self.fonts["page"].configure(size=base * 2)
@@ -363,6 +400,7 @@ class ApproxTrainGUI:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main menu
+# Simple main menu, first thing on start up.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MainMenuFrame(tk.Frame):
@@ -384,7 +422,7 @@ class MainMenuFrame(tk.Frame):
 
         for label, cls in [
             ("Credits",     CreditsFrame),
-            ("Train",       BuildFrame),
+            ("Train",       TrainFrame),
             ("Model Maker", ModelMakerFrame),
             ("Options",     OptionsFrame),
         ]:
@@ -394,10 +432,11 @@ class MainMenuFrame(tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Build
+# Train
+# Allows the user to select a training script, a look up table, and the option to enable/disable approximate mode.
 # ─────────────────────────────────────────────────────────────────────────────
 
-class BuildFrame(RunnerMixin, tk.Frame):
+class TrainFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
         self.app = app
@@ -410,6 +449,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         self._build()
         self._refresh_preview()
 
+    #Builds the UI components for the Train page
     def _build(self):
         main = ttk.Frame(self, padding=12)
         main.pack(fill="both", expand=True)
@@ -456,6 +496,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
         log = self._make_output_notebook(main)
         self._init_runner(log, self._metrics)
 
+    #File browsing for the training script
     def _browse_script(self):
         p = filedialog.askopenfilename(
             title="Select Python script",
@@ -467,6 +508,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
             except ValueError:
                 self._script_var.set(p)
 
+    #File browsing for the LUT
     def _browse_lut(self):
         p = filedialog.askopenfilename(
             title="Select LUT file",
@@ -478,6 +520,7 @@ class BuildFrame(RunnerMixin, tk.Frame):
             except ValueError:
                 self._lut_var.set(p)
 
+    #Builds the command to run the training script based on selection
     def _build_cmd(self):
         script = self._script_var.get().strip()
         if not script:
@@ -490,12 +533,14 @@ class BuildFrame(RunnerMixin, tk.Frame):
             cmd += ["--approx"]
         return cmd
 
+    #Refresh command preview based on the user's current selection
     def _refresh_preview(self):
         try:
             self._preview_var.set(" ".join(self._build_cmd()))
         except Exception as e:
             self._preview_var.set(f"(error: {e})")
 
+    #Try to run the script, unless there is an error. Also checks to be sure that the script exists.
     def _do_run(self):
         try:
             cmd = self._build_cmd()
@@ -509,7 +554,8 @@ class BuildFrame(RunnerMixin, tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Model Maker — layer row
+# Model Maker — layer rows
+# UI components for the Model maker for allowing the user to build their own model
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LayerRow(tk.Frame):
@@ -559,14 +605,17 @@ class LayerRow(tk.Frame):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model Maker frame
+# Handles the brunt of the logic, such as the script generation.
 # ─────────────────────────────────────────────────────────────────────────────
 
+#Basic model maker datasets. The user is also allowed to select "Custom" to pull from another dataset, but these are defaults for ease of use.
 MAKER_DATASETS = {
     "MNIST":         "mnist",
     "Fashion-MNIST": "fashion_mnist",
     "KMNIST":        "kmnist",
 }
 
+#Main frame
 class ModelMakerFrame(RunnerMixin, tk.Frame):
     def __init__(self, parent, app):
         tk.Frame.__init__(self, parent)
@@ -586,6 +635,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             self._add_row(initial_type=t)
         self._add_output_row()
 
+    #Builds UI components
     def _build(self):
         top = ttk.Frame(self, padding=(12, 8, 12, 0))
         top.pack(fill="x")
@@ -692,6 +742,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
 
     # ── Layer management ──────────────────────────────────────────────────────
 
+    #For adding a new layer to the model architecture
     def _add_output_row(self):
         row = LayerRow(self._stack,
                        on_change=self._refresh_code,
@@ -706,6 +757,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             pass
         self._refresh_code()
 
+    #For selecting the LUT for approximate mode, with file browsing
     def _browse_lut(self):
         p = filedialog.askopenfilename(
             title="Select LUT file", initialdir=REPO_ROOT / "lut",
@@ -716,6 +768,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             except ValueError:
                 self._lut_var.set(p)
 
+    #Changing dataset, especially checking for "Custom" selection to show/hide the custom dataset entry field
     def _on_dataset_change(self):
         if self._dataset_var.get() == "Custom…":
             self._custom_entry.pack(side="left", padx=(4, 0))
@@ -723,6 +776,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             self._custom_entry.pack_forget()
         self._refresh_code()
 
+    #Add a new layer to the model
     def _add_row(self, initial_type=None):
         row = LayerRow(self._stack,
                        on_change=self._refresh_code,
@@ -732,6 +786,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
         self._rows.append(row)
         self._refresh_code()
 
+    #Remove a layer from the model
     def _remove_row(self, row):
         if row in self._rows:
             self._rows.remove(row)
@@ -740,6 +795,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
 
     # ── Code generation ───────────────────────────────────────────────────────
 
+    #Generating the training script based on the user-selected parameters
     def _generate(self):
         cfgs     = [r.get_config() for r in self._rows]
         has_conv = any(c["type"] == "Conv2D" for c in cfgs)
@@ -773,6 +829,7 @@ class ModelMakerFrame(RunnerMixin, tk.Frame):
             f"LUT = '{lut_rel}'\n"
         ) if approx else ""
 
+        #Final generated script as a multiline string. Gets written to a temporary file and saved until next launch, in which case it will be deleted on next startup.
         return (
 f"""import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -856,7 +913,9 @@ print(f"Test accuracy: {{acc:.4f}}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Placeholder frames
+# Credits
+# Pulls from credits.txt for easy editing and updating, especially for future contributions.
+# It is encouraged for any future major contributors to add their name here.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CreditsFrame(tk.Frame):
@@ -884,6 +943,11 @@ class CreditsFrame(tk.Frame):
         except FileNotFoundError:
             return "(credits.txt not found)"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Options
+# Used for changing font size for accessibility
+# Also a placeholder for future options.
+# ─────────────────────────────────────────────────────────────────────────────
 
 class OptionsFrame(tk.Frame):
     def __init__(self, parent, app):
@@ -909,6 +973,9 @@ class OptionsFrame(tk.Frame):
         self._size_label = ttk.Label(settings, textvariable=self._font_var, width=3)
         self._size_label.grid(row=0, column=2, padx=(0, 12))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Main loop!
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     root = tk.Tk()
